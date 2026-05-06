@@ -1,0 +1,19 @@
+{
+  "name": "voting-bot",
+  "version": "1.0.0",
+  "description": "Automated voting bot using Puppeteer — production-ready for Render",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "start:dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=21.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "puppeteer": "^24.15.0"
+  }
+}
