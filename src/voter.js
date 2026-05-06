@@ -1,280 +1,217 @@
 import puppeteer from 'puppeteer';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
 const TARGET_URL = 'https://mycutebaby.in/contest/participant/69f39325be245';
 const MAX_RETRIES = 2;
 
-// Pool of realistic user-agents to rotate
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const sleep = (min, max) =>
+  new Promise((r) => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
 
-/**
- * Sleep for a random duration between [min, max] milliseconds.
- */
-const randomSleep = (min, max) =>
-  new Promise((resolve) =>
-    setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min)
-  );
-
-/**
- * Pick a random element from an array.
- */
 const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-/**
- * Type into an element character-by-character like a human.
- */
-const humanType = async (page, selector, text) => {
-  await page.focus(selector);
-  for (const char of text) {
-    await page.keyboard.type(char, { delay: Math.floor(Math.random() * 80) + 40 });
-  }
-};
-
-// ─── Puppeteer Browser Factory ────────────────────────────────────────────────
-
-const launchBrowser = async () => {
-  return puppeteer.launch({
+const launchBrowser = async () =>
+  puppeteer.launch({
     headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
       '--no-first-run',
       '--no-zygote',
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
       '--window-size=1366,768',
     ],
     defaultViewport: { width: 1366, height: 768 },
   });
-};
 
-// ─── Core Vote Logic ──────────────────────────────────────────────────────────
-
-/**
- * Attempt to cast a single vote.
- * Returns { success: boolean, message: string }
- */
 const attemptVote = async () => {
   let browser = null;
-
   try {
-    console.log(`[Voter] Launching browser...`);
+    console.log('[Voter] Launching browser...');
     browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // ── Realistic browser fingerprint ──
-    const userAgent = pickRandom(USER_AGENTS);
-    await page.setUserAgent(userAgent);
+    await page.setUserAgent(pickRandom(USER_AGENTS));
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'en-US,en;q=0.9',
-      Accept:
-        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      Connection: 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Cache-Control': 'max-age=0',
+      'Upgrade-Insecure-Requests': '1',
     });
 
-    // Mask automation flags
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [1, 2, 3],
-      });
       window.chrome = { runtime: {} };
     });
 
-    // ── Navigate to page ──
     console.log(`[Voter] Navigating to: ${TARGET_URL}`);
-    await page.goto(TARGET_URL, {
-      waitUntil: 'networkidle2',
-      timeout: 60000,
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    await sleep(2000, 3500);
+
+    // ── FULL PAGE DUMP — helps us see what Puppeteer sees ──────────────────
+    const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 800) || '');
+    console.log('[Voter] PAGE TEXT DUMP:\n' + pageText);
+
+    const allButtons = await page.evaluate(() => {
+      const els = [...document.querySelectorAll('button, a, input[type="submit"], div[onclick], span[onclick]')];
+      return els.map((el) => ({
+        tag: el.tagName,
+        id: el.id || '',
+        cls: el.className || '',
+        text: (el.textContent || el.value || '').trim().slice(0, 80),
+        visible: el.offsetParent !== null,
+      }));
     });
+    console.log('[Voter] ALL CLICKABLE ELEMENTS:\n' + JSON.stringify(allButtons, null, 2));
 
-    // Human-like pause after page load
-    await randomSleep(1500, 3500);
+    // ── Cooldown check ──────────────────────────────────────────────────────
+    const lowerText = pageText.toLowerCase();
+    const onCooldown =
+      lowerText.includes('you can vote again') ||
+      lowerText.includes('vote again at') ||
+      lowerText.includes('vote button will appear');
 
-    // ── Auto-detect name input field ──
-    const nameFieldSelector = await page.evaluate(() => {
-      // Priority list of selectors to try for a "name" input
-      const candidates = [
-        'input[name*="name" i]',
-        'input[placeholder*="name" i]',
-        'input[id*="name" i]',
-        'input[type="text"]',
-        'input:not([type="hidden"]):not([type="submit"]):not([type="button"])',
-      ];
-      for (const selector of candidates) {
-        const el = document.querySelector(selector);
-        if (el) return selector;
-      }
-      return null;
-    });
-
-    if (!nameFieldSelector) {
-      throw new Error('Could not detect a name input field on the page.');
+    if (onCooldown) {
+      console.log('[Voter] ⏳ Cooldown active — skipping.');
+      return { success: false, reason: 'cooldown', message: 'Cooldown active' };
     }
-    console.log(`[Voter] Found name field: ${nameFieldSelector}`);
 
-    // Clear existing value, then type name human-style
-    await page.click(nameFieldSelector, { clickCount: 3 });
-    await randomSleep(300, 700);
-    await humanType(page, nameFieldSelector, VOTER_NAME);
-    console.log(`[Voter] Typed voter name: "${VOTER_NAME}"`);
-    await randomSleep(800, 1800);
+    // ── Find TAP TO VOTE button ─────────────────────────────────────────────
+    // Site already remembers voter name — just click the green button
+    const voteHandle = await page.evaluateHandle(() => {
+      const all = [...document.querySelectorAll('button, a, div, span, input[type="submit"]')];
 
-    // ── Auto-detect and click the vote button ──
-    const voteButtonSelector = await page.evaluate(() => {
-      const candidates = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:not([type="button"])',
-        '[class*="vote" i]',
-        '[id*="vote" i]',
-        'button',
-      ];
-      for (const selector of candidates) {
-        const els = [...document.querySelectorAll(selector)];
-        // Prefer elements whose text contains "vote"
-        const voteEl = els.find((el) =>
-          /vote/i.test(el.textContent || el.value || '')
-        );
-        if (voteEl) {
-          // Build a unique selector
-          if (voteEl.id) return `#${voteEl.id}`;
-          if (voteEl.className) {
-            const cls = voteEl.className.split(' ')[0];
-            return `${voteEl.tagName.toLowerCase()}.${cls}`;
-          }
-          return selector;
-        }
-      }
-      // Fallback: first submit button
-      const fallback = document.querySelector(
-        'button[type="submit"], input[type="submit"]'
+      // 1. Text match: "TAP TO VOTE"
+      const byText = all.find((el) =>
+        /tap\s+to\s+vote/i.test((el.textContent || el.value || '').trim())
       );
-      if (fallback) {
-        if (fallback.id) return `#${fallback.id}`;
-        return 'button[type="submit"]';
-      }
-      return null;
+      if (byText) return byText;
+
+      // 2. Any element with "vote" in class
+      const byClass = document.querySelector('[class*="vote" i]');
+      if (byClass) return byClass;
+
+      // 3. Any onclick attribute containing "vote"
+      const byOnclick = all.find((el) =>
+        /vote/i.test(el.getAttribute('onclick') || '')
+      );
+      if (byOnclick) return byOnclick;
+
+      // 4. Green background element (heuristic)
+      const byColor = all.find((el) => {
+        const bg = window.getComputedStyle(el).backgroundColor;
+        return bg && (bg.includes('0, 128') || bg.includes('34, 197') || bg.includes('21, 128'));
+      });
+      if (byColor) return byColor;
+
+      // 5. Any button / submit
+      return document.querySelector('button, input[type="submit"]');
     });
 
-    if (!voteButtonSelector) {
-      throw new Error('Could not detect a vote button on the page.');
+    const btnExists = await page.evaluate((el) => !!el && el.offsetParent !== null, voteHandle);
+
+    if (!btnExists) {
+      console.error('[Voter] ❌ No visible button found on page.');
+      return { success: false, reason: 'no-button', message: 'TAP TO VOTE button not found' };
     }
-    console.log(`[Voter] Found vote button: ${voteButtonSelector}`);
 
-    // Smooth scroll button into view
-    await page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, voteButtonSelector);
-    await randomSleep(600, 1200);
+    const btnInfo = await page.evaluate((el) => ({
+      tag: el.tagName,
+      id: el.id,
+      cls: el.className,
+      text: (el.textContent || el.value || '').trim().slice(0, 80),
+    }), voteHandle);
+    console.log(`[Voter] ✅ Clicking button: ${JSON.stringify(btnInfo)}`);
 
-    // Click the vote button
-    await page.click(voteButtonSelector);
-    console.log(`[Voter] Clicked vote button. Waiting for confirmation...`);
+    // Scroll + human mouse move
+    await page.evaluate((el) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), voteHandle);
+    await sleep(600, 1200);
 
-    // ── Wait for success/confirmation signal ──
-    const confirmationResult = await Promise.race([
-      // Option A: URL changes (redirect to success page)
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).then(() => 'navigation'),
+    const box = await voteHandle.boundingBox();
+    if (box) {
+      await page.mouse.move(
+        box.x + box.width / 2 + Math.floor(Math.random() * 10 - 5),
+        box.y + box.height / 2 + Math.floor(Math.random() * 6 - 3),
+        { steps: Math.floor(Math.random() * 8) + 5 }
+      );
+      await sleep(200, 500);
+    }
 
-      // Option B: Success text appears in the DOM
-      page
-        .waitForFunction(
-          () => {
-            const body = document.body?.innerText?.toLowerCase() || '';
-            return (
-              body.includes('thank') ||
-              body.includes('success') ||
-              body.includes('voted') ||
-              body.includes('recorded') ||
-              body.includes('congratul')
-            );
-          },
-          { timeout: 15000 }
-        )
-        .then(() => 'success-text'),
+    await voteHandle.click();
+    console.log('[Voter] 🖱️  Clicked. Waiting for confirmation...');
+
+    // ── Wait for success or cooldown timer to appear ────────────────────────
+    const signal = await Promise.race([
+      page.waitForFunction(
+        () => {
+          const t = (document.body?.innerText || '').toLowerCase();
+          return (
+            t.includes('thank') ||
+            t.includes('voted') ||
+            t.includes('success') ||
+            t.includes('recorded') ||
+            t.includes('congratul') ||
+            t.includes('you can vote again') ||
+            t.includes('vote again at')
+          );
+        },
+        { timeout: 20000 }
+      ).then(() => 'text-confirmed'),
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).then(() => 'navigated'),
     ]).catch(() => 'timeout');
 
-    console.log(`[Voter] Confirmation signal: "${confirmationResult}"`);
-
-    // Capture final page state for logging
     const finalUrl = page.url();
-    const pageSnippet = await page
-      .evaluate(() => document.body?.innerText?.slice(0, 300))
-      .catch(() => '');
+    const finalText = await page.evaluate(() => document.body?.innerText?.slice(0, 300)).catch(() => '');
+    console.log(`[Voter] Signal: "${signal}". URL: ${finalUrl}`);
+    console.log(`[Voter] Final page: ${finalText.slice(0, 200)}`);
 
-    if (confirmationResult === 'timeout') {
-      // Timeout is treated as a soft failure — the vote may still have gone through
-      console.warn(`[Voter] No explicit confirmation received within 15 s. Final URL: ${finalUrl}`);
-      console.warn(`[Voter] Page snippet: ${pageSnippet}`);
-      return {
-        success: false,
-        message: `Timeout — no confirmation. Final URL: ${finalUrl}`,
-      };
+    if (signal === 'timeout') {
+      return { success: false, reason: 'timeout', message: `Timeout. URL: ${finalUrl}` };
     }
 
-    console.log(`[Voter] ✅ Vote submitted successfully! Final URL: ${finalUrl}`);
-    return { success: true, message: `Vote confirmed via "${confirmationResult}". URL: ${finalUrl}` };
-  } catch (error) {
-    console.error(`[Voter] ❌ Error during vote attempt: ${error.message}`);
-    return { success: false, message: error.message };
+    console.log('[Voter] 🎉 Vote SUCCESS!');
+    return { success: true, message: `Confirmed via "${signal}". URL: ${finalUrl}` };
+
+  } catch (err) {
+    console.error(`[Voter] ❌ Exception: ${err.message}`);
+    return { success: false, reason: 'exception', message: err.message };
   } finally {
     if (browser) {
       await browser.close();
-      console.log(`[Voter] Browser closed.`);
+      console.log('[Voter] 🔒 Browser closed.');
     }
   }
 };
 
-// ─── Public: Vote with Retry ──────────────────────────────────────────────────
-
-/**
- * Cast a vote with automatic retry on failure.
- * Exported for use by the scheduler and manual triggers.
- */
 export const castVote = async () => {
   console.log(`\n${'─'.repeat(60)}`);
-  console.log(`[Voter] ⏰ Vote cycle started at ${new Date().toISOString()}`);
+  console.log(`[Voter] ⏰ Cycle started: ${new Date().toISOString()}`);
   console.log(`${'─'.repeat(60)}`);
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    console.log(`[Voter] Attempt ${attempt} / ${MAX_RETRIES}`);
-
+    console.log(`[Voter] Attempt ${attempt}/${MAX_RETRIES}`);
     const result = await attemptVote();
 
+    if (result.reason === 'cooldown') {
+      return { success: false, reason: 'cooldown', message: result.message };
+    }
     if (result.success) {
-      console.log(`[Voter] 🎉 Vote cast successfully on attempt ${attempt}.`);
-      console.log(`[Voter] Message: ${result.message}`);
       return result;
     }
 
     console.warn(`[Voter] Attempt ${attempt} failed: ${result.message}`);
-
     if (attempt < MAX_RETRIES) {
-      const waitMs = attempt * 8000 + Math.floor(Math.random() * 4000); // 8–12 s, 16–20 s
-      console.log(`[Voter] Retrying in ${(waitMs / 1000).toFixed(1)} s...`);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      const wait = 8000 + Math.floor(Math.random() * 4000);
+      console.log(`[Voter] ⟳ Retrying in ${(wait / 1000).toFixed(1)}s...`);
+      await new Promise((r) => setTimeout(r, wait));
     }
   }
 
-  const finalMessage = `All ${MAX_RETRIES} attempts failed.`;
-  console.error(`[Voter] ❌ ${finalMessage}`);
-  return { success: false, message: finalMessage };
+  return { success: false, message: `All ${MAX_RETRIES} attempts failed.` };
 };
