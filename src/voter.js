@@ -2,8 +2,7 @@ import puppeteer from 'puppeteer';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TARGET_URL = 'https://mycutebaby.in/contest/participant/69f39325be245';
-const VOTER_NAME = 'Kishan';
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 2;
 
 // Pool of realistic user-agents to rotate
 const USER_AGENTS = [
