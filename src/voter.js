@@ -64,143 +64,64 @@ const attemptVote = async () => {
     await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
     await sleep(3000, 5000);
 
-    // ── REMOVE ADS & POPUPS (They block clicks) ──────────────────────────
-    console.log('[Voter] Removing ads and overlays...');
+    // ── REMOVE ADS & POPUPS (More aggressive) ──────────────────────────
+    console.log('[Voter] Nuking ads and overlays...');
     await page.evaluate(() => {
       const selectors = [
-        'iframe', '.adsbygoogle', '#google_ads_frame', '[id^="google_ads"]',
+        'iframe', 'ins', '.adsbygoogle', '#google_ads_frame', '[id^="google_ads"]',
         '.modal', '.fade', '.show', '[class*="popup"]', '[id*="popup"]',
-        '#fan_box', '.fc-consent-root'
+        '#fan_box', '.fc-consent-root', '[id*="google_vignette"]', '.google-vignette-container',
+        '#aswift_0_host', '#aswift_0_expand', '#aswift_1_host', '#aswift_1_expand'
       ];
       selectors.forEach(s => {
-        document.querySelectorAll(s).forEach(el => el.remove());
+        document.querySelectorAll(s).forEach(el => {
+          el.style.display = 'none';
+          el.remove();
+        });
       });
+      // Also remove any full-screen overlays that might be invisible
+      const all = document.querySelectorAll('*');
+      for (const el of all) {
+        if (window.getComputedStyle(el).zIndex > 1000) el.remove();
+      }
     });
-    await sleep(1000, 2000);
-
-    // ── FULL PAGE DUMP ──────────────────────────────────────────────────────
-    const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 800) || '');
-    console.log('[Voter] PAGE TEXT DUMP:\n' + pageText);
-
-    const allButtons = await page.evaluate(() => {
-      const els = [...document.querySelectorAll('button, a, input[type="submit"], div[onclick], span[onclick]')];
-      return els.map((el) => ({
-        tag: el.tagName,
-        id: el.id || '',
-        cls: el.className || '',
-        text: (el.textContent || el.value || '').trim().slice(0, 80),
-        visible: el.offsetParent !== null,
-      }));
-    });
-    console.log('[Voter] ALL CLICKABLE ELEMENTS:\n' + JSON.stringify(allButtons, null, 2));
-
-    // ── Cooldown check ──────────────────────────────────────────────────────
-    const lowerText = pageText.toLowerCase();
-    const onCooldown =
-      lowerText.includes('you can vote again') ||
-      lowerText.includes('vote again at') ||
-      lowerText.includes('vote button will appear');
-
-    if (onCooldown) {
-      console.log('[Voter] ⏳ Cooldown active — skipping.');
-      return { success: false, reason: 'cooldown', message: 'Cooldown active' };
-    }
+    await sleep(2000, 3000);
 
     // ── Find TAP TO VOTE button ─────────────────────────────────────────────
-    // Site already remembers voter name — just click the green button
     const voteHandle = await page.evaluateHandle(() => {
       const all = [...document.querySelectorAll('button, a, div, span, input[type="submit"]')];
-
-      // 1. Text match: "TAP TO VOTE"
-      const byText = all.find((el) =>
-        /tap\s+to\s+vote/i.test((el.textContent || el.value || '').trim())
-      );
-      if (byText) return byText;
-
-      // 2. Any element with "vote" in class
-      const byClass = document.querySelector('[class*="vote" i]');
-      if (byClass) return byClass;
-
-      // 3. Any onclick attribute containing "vote"
-      const byOnclick = all.find((el) =>
-        /vote/i.test(el.getAttribute('onclick') || '')
-      );
-      if (byOnclick) return byOnclick;
-
-      // 4. Green background element (heuristic)
-      const byColor = all.find((el) => {
-        const bg = window.getComputedStyle(el).backgroundColor;
-        return bg && (bg.includes('0, 128') || bg.includes('34, 197') || bg.includes('21, 128'));
-      });
-      if (byColor) return byColor;
-
-      // 5. Any button / submit
-      return document.querySelector('button, input[type="submit"]');
+      return all.find((el) => /tap\s+to\s+vote/i.test((el.textContent || el.value || '').trim()));
     });
 
     const btnExists = await page.evaluate((el) => !!el && el.offsetParent !== null, voteHandle);
-
     if (!btnExists) {
-      console.error('[Voter] ❌ No visible button found on page.');
-      return { success: false, reason: 'no-button', message: 'TAP TO VOTE button not found' };
+      console.error('[Voter] ❌ No button found.');
+      return { success: false, reason: 'no-button', message: 'Button not found' };
     }
-
-    const btnInfo = await page.evaluate((el) => ({
-      tag: el.tagName,
-      id: el.id,
-      cls: el.className,
-      text: (el.textContent || el.value || '').trim().slice(0, 80),
-    }), voteHandle);
-    console.log(`[Voter] ✅ Clicking button: ${JSON.stringify(btnInfo)}`);
 
     // Scroll + human mouse move
     await page.evaluate((el) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), voteHandle);
-    await sleep(600, 1200);
-
-    const box = await voteHandle.boundingBox();
-    if (box) {
-      await page.mouse.move(
-        box.x + box.width / 2 + Math.floor(Math.random() * 10 - 5),
-        box.y + box.height / 2 + Math.floor(Math.random() * 6 - 3),
-        { steps: Math.floor(Math.random() * 8) + 5 }
-      );
-      await sleep(200, 500);
-    }
+    await sleep(1000, 2000);
 
     await voteHandle.click();
-    console.log('[Voter] 🖱️  Clicked. Waiting for confirmation...');
+    console.log('[Voter] 🖱️  Clicked. Waiting 10s to verify...');
+    await sleep(10000, 12000); // Wait for the site to process the vote
 
-    // ── Wait for success or cooldown timer to appear ────────────────────────
-    const signal = await Promise.race([
-      page.waitForFunction(
-        () => {
-          const t = (document.body?.innerText || '').toLowerCase();
-          return (
-            t.includes('thank') ||
-            t.includes('voted') ||
-            t.includes('success') ||
-            t.includes('recorded') ||
-            t.includes('congratul') ||
-            t.includes('you can vote again') ||
-            t.includes('vote again at')
-          );
-        },
-        { timeout: 20000 }
-      ).then(() => 'text-confirmed'),
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).then(() => 'navigated'),
-    ]).catch(() => 'timeout');
+    // ── VERIFICATION: Is the button still there? ──────────────────────────
+    const stillThere = await page.evaluate(() => {
+      const all = [...document.querySelectorAll('button, a, div, span, input[type="submit"]')];
+      const btn = all.find((el) => /tap\s+to\s+vote/i.test((el.textContent || el.value || '').trim()));
+      return !!btn && btn.offsetParent !== null;
+    });
 
-    const finalUrl = page.url();
-    const finalText = await page.evaluate(() => document.body?.innerText?.slice(0, 300)).catch(() => '');
-    console.log(`[Voter] Signal: "${signal}". URL: ${finalUrl}`);
-    console.log(`[Voter] Final page: ${finalText.slice(0, 200)}`);
-
-    if (signal === 'timeout') {
-      return { success: false, reason: 'timeout', message: `Timeout. URL: ${finalUrl}` };
+    if (stillThere) {
+      console.warn('[Voter] ⚠️  Button is still visible! Click failed.');
+      return { success: false, message: 'Button still visible after click' };
     }
 
-    console.log('[Voter] 🎉 Vote SUCCESS!');
-    return { success: true, message: `Confirmed via "${signal}". URL: ${finalUrl}` };
+    const finalUrl = page.url();
+    console.log(`[Voter] 🎉 Vote SUCCESS! Final URL: ${finalUrl}`);
+    return { success: true, message: `Vote confirmed (button disappeared). URL: ${finalUrl}` };
 
   } catch (err) {
     console.error(`[Voter] ❌ Exception: ${err.message}`);
