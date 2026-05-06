@@ -48,9 +48,23 @@ const attemptVote = async () => {
 
     console.log(`[Voter] Navigating to: ${TARGET_URL}`);
     await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    await sleep(2000, 3500);
+    await sleep(3000, 5000);
 
-    // ── FULL PAGE DUMP — helps us see what Puppeteer sees ──────────────────
+    // ── REMOVE ADS & POPUPS (They block clicks) ──────────────────────────
+    console.log('[Voter] Removing ads and overlays...');
+    await page.evaluate(() => {
+      const selectors = [
+        'iframe', '.adsbygoogle', '#google_ads_frame', '[id^="google_ads"]',
+        '.modal', '.fade', '.show', '[class*="popup"]', '[id*="popup"]',
+        '#fan_box', '.fc-consent-root'
+      ];
+      selectors.forEach(s => {
+        document.querySelectorAll(s).forEach(el => el.remove());
+      });
+    });
+    await sleep(1000, 2000);
+
+    // ── FULL PAGE DUMP ──────────────────────────────────────────────────────
     const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 800) || '');
     console.log('[Voter] PAGE TEXT DUMP:\n' + pageText);
 
