@@ -17,17 +17,13 @@ const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const launchBrowser = async () =>
   puppeteer.launch({
     headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--window-size=1366,768',
     ],
-    defaultViewport: { width: 1366, height: 768 },
   });
 
 const attemptVote = async () => {
