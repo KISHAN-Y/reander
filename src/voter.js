@@ -23,15 +23,29 @@ const launchBrowser = async () =>
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--no-zygote',
+      '--single-process', // Saves RAM
+      '--disable-extensions',
     ],
+    defaultViewport: { width: 800, height: 600 }, // Smaller viewport = less RAM
   });
 
 const attemptVote = async () => {
   let browser = null;
   try {
-    console.log('[Voter] Launching browser...');
+    console.log('[Voter] Launching browser (Memory Optimized)...');
     browser = await launchBrowser();
     const page = await browser.newPage();
+
+    // Block Images & CSS to save RAM/Speed
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
     await page.setUserAgent(pickRandom(USER_AGENTS));
     await page.setExtraHTTPHeaders({
